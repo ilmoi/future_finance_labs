@@ -8,7 +8,8 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4.19"
-yahoo_finance_api = {"version" = "1.0", features = ["blocking"]}
+# , features = ["blocking"]
+yahoo_finance_api = {"version" = "1.0"}
 tokio = { version = "1", features = ["full"] }
 clap = "3.0.0-beta.2"
 rust_decimal = "1.14"

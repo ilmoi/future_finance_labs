@@ -1,39 +1,14 @@
-use std::cmp::Ordering;
-use std::error::Error;
 use std::io;
-use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, TimeZone, Utc};
-use clap::{App, Arg, Clap};
+use clap::Clap;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
-use rust_decimal_macros::dec;
-use yahoo_finance_api::Quote;
 
-#[derive(Debug, PartialEq, PartialOrd)]
-struct YQuote {
-    timestamp: u64,
-    open: Decimal,
-    high: Decimal,
-    low: Decimal,
-    volume: u64,
-    close: Decimal,
-    adjclose: Decimal,
-}
-
-impl From<Quote> for YQuote {
-    fn from(q: Quote) -> Self {
-        Self {
-            timestamp: q.timestamp,
-            open: Decimal::from_str(&q.open.to_string()).unwrap(), //todo could be done better - chop off X digits and go via int + currently using unwrap instead of proper deserialization
-            high: Decimal::from_str(&q.high.to_string()).unwrap(),
-            low: Decimal::from_str(&q.low.to_string()).unwrap(),
-            volume: q.volume,
-            close: Decimal::from_str(&q.close.to_string()).unwrap(),
-            adjclose: Decimal::from_str(&q.adjclose.to_string()).unwrap(),
-        }
-    }
-}
+use future_finance_labs::process_data::{extract_adjclose, min_and_max, n_window_sma, price_diff};
+use future_finance_labs::download_data::fetch_stonks_data;
+use future_finance_labs::processor_actor::ProcessorActorHandle;
+use future_finance_labs::downloader_actor::DownloaderActorHandle;
 
 //simpler but defo lacking functionality vs normal builder pattern
 //can't pass in Utc::now() as default value
@@ -57,98 +32,40 @@ struct Opts {
     to: String,
 }
 
-fn main() {
+#[tokio::main]
+pub async fn main() {
     let opts = Opts::parse();
     let from:DateTime<Utc> = opts.from.parse().unwrap_or(Utc::now() - chrono::Duration::days(60));
     let to:DateTime<Utc> = opts.to.parse().unwrap_or(Utc::now());
 
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&["period start", "symbol", "price", "change %", "min", "max", "30d avg"]).unwrap();
+    wtr.flush().unwrap();
+
+    let downloader_handle = DownloaderActorHandle::new();
 
     for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
-        let mut quotes = fetch_stonks_data(ticker, from, to).unwrap();
-        quotes.sort_by_cached_key(|k| k.timestamp); //just in case aren't sorted already
 
-        let mut adjclose_series = extract_adjclose(&quotes);
-        let (min_, max_) = min_and_max(&adjclose_series);
-        let smas = n_window_sma(30, &adjclose_series).unwrap();
-        let (diff, percent) = price_diff(&adjclose_series);
+        // todo q1: how are actors better than a simple event loop?
+        //  - actors shine when you have a single resource that you can't multiply and want to share across many tasks
+        //  - eg if we only had 1 connection to yahoo api, we'd send all requests to that one actor who'd process them and return the results to each task separately
+        //  - see an example here - https://tokio.rs/tokio/tutorial/channels = single conn, can't copy, can't do mutex, can't do tokio mutex - so the only way is to put inside an actor
 
-        let first_quote = &quotes[0];
+        // todo q2: does the architecture of downloader-actor / processor-actor make sense?
+        //  - not really
+        //  - downloader blocks processor, so they might as well be part of one and the same async task
+        //  - in other words, a single tokio::spawn for the pair of download+process data should be enough
 
-        wtr.write_record(&[
-            Utc.timestamp(first_quote.timestamp as i64, 0).to_rfc3339(),
-            ticker.into(),
-            first_quote.close.round_dp(2).to_string(),
-            (percent * Decimal::from(100)).round_dp(2).to_string(),
-            min_.round_dp(2).to_string(),
-            max_.round_dp(2).to_string(),
-            smas[smas.len() - 1].round_dp(2).to_string(),
-        ]).unwrap();
-        wtr.flush().unwrap();
+        // todo so to sum up - might as well have gone with a simple async event loop, with both tasks inside of one iter of it
+        //  UNLESS I implemented a full q system - where all downloaders dump data in, all processors pick data up - which I think is what those guys did
+        //  tokio doesn't do mpmc - https://github.com/tokio-rs/tokio/discussions/3891
+
+        // fetch data
+        let quotes = downloader_handle.download_data(ticker.into(), from, to).await;
+
+        // process data
+        let processor_handle = ProcessorActorHandle::new();
+        processor_handle.process_data(quotes, ticker.into()).await;
     }
-}
-
-///API Limits
-// - Using the Public API (without authentication), you are limited to 2,000 requests per hour per IP (or up to a total of 48,000 requests a day).
-// - Seems that 1h is resolution limit
-fn fetch_stonks_data(ticker: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<YQuote>, Box<dyn Error>> {
-    let provider = yahoo_finance_api::YahooConnector::new();
-    //todo frequency - play with 1d/1h should work for both
-    let response = match provider.get_quote_history_interval(ticker, from, to, "1d") {
-        Ok(r) => r,
-        Err(e) => {
-            println!("An ERROR occured: {:?}", e);
-            return Err(Box::new(e));
-        }
-    };
-    let quotes: Vec<YQuote> = response.quotes().unwrap().into_iter().map(|q| q.into()).collect();
-    // for quote in &quotes {
-    //     println!("{:#?}", quote);
-    //     let time_of_quote = DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(quote.timestamp));
-    //     println!("{}", time_of_quote);
-    // }
-    Ok(quotes)
-}
-
-fn extract_adjclose(quotes: &[YQuote]) -> Vec<Decimal> {
-    quotes.iter().map(|q| q.adjclose).collect()
-}
-
-fn min_and_max(series: &[Decimal]) -> (Decimal, Decimal) {
-    // todo still think this can be done better than O(n) - will see if it's a bottleneck
-    let mut min_ = series[0];
-    let mut max_ = series[0];
-    for price in series {
-        if *price < min_ {
-            min_ = *price
-        } else if *price > max_ {
-            max_ = *price
-        }
-    }
-    (min_, max_)
-}
-
-
-/// only calculates when enough days
-fn n_window_sma(n: usize, series: &[Decimal]) -> Option<Vec<Decimal>> {
-    if n > series.len() {
-        return None;
-    }
-    let smas: Vec<Decimal> = series //todo
-        .windows(n)
-        .map(|w| w.iter().sum::<Decimal>() / Decimal::from(n))
-        .collect();
-    Some(smas)
-}
-
-fn price_diff(series: &[Decimal]) -> (Decimal, Decimal) {
-    let mut first = series[0];
-    // prevent division by 0
-    if first == Decimal::from(0) {
-        first = Decimal::from(1)
-    }
-    let last = series[series.len() - 1];
-    (last - first, last / first - Decimal::from(1))
 }
 
