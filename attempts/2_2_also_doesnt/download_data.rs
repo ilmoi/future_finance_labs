@@ -36,13 +36,12 @@ impl From<Quote> for YQuote {
 // - Using the Public API (without authentication), you are limited to 2,000 requests per hour per IP (or up to a total of 48,000 requests a day).
 // - Seems that 1h is resolution limit
 pub async fn fetch_stonks_data(
+    provider: &YahooConnector,
     ticker: String,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<Vec<YQuote>, Box<dyn Error>> {
-    println!("START downloading...");
-
-    let provider = YahooConnector::new();
+    println!("download starting..");
 
     std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -57,6 +56,7 @@ pub async fn fetch_stonks_data(
             return Err(Box::new(e));
         }
     };
+
     let mut quotes: Vec<YQuote> = response
         .quotes()
         .unwrap()
@@ -72,7 +72,7 @@ pub async fn fetch_stonks_data(
 
     quotes.sort_by_cached_key(|k| k.timestamp); //just in case aren't sorted already
 
-    println!("END downloading...");
+    println!("download done..");
 
     Ok(quotes)
 }

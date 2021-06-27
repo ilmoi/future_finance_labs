@@ -1,11 +1,11 @@
 use std::error::Error;
 
-use crate::process_data::min_and_max;
 use chrono::{DateTime, Utc};
-use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
-use std::sync::Arc;
+use rust_decimal::prelude::*;
 use yahoo_finance_api::{Quote, YahooConnector};
+use crate::process_data::min_and_max;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 pub struct YQuote {
@@ -35,34 +35,19 @@ impl From<Quote> for YQuote {
 ///API Limits
 // - Using the Public API (without authentication), you are limited to 2,000 requests per hour per IP (or up to a total of 48,000 requests a day).
 // - Seems that 1h is resolution limit
-pub async fn fetch_stonks_data(
-    ticker: String,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-) -> Result<Vec<YQuote>, Box<dyn Error>> {
-    println!("START downloading...");
-
-    let provider = YahooConnector::new();
+pub async fn fetch_stonks_data(provider: &YahooConnector, ticker: String, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<YQuote>, Box<dyn Error>> {
 
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     //todo frequency - play with 1d/1h should work for both
-    let response = match provider
-        .get_quote_history_interval(&ticker, from, to, "1d")
-        .await
-    {
+    let response = match provider.get_quote_history_interval(&ticker, from, to, "1d").await {
         Ok(r) => r,
         Err(e) => {
             println!("An ERROR occured: {:?}", e);
             return Err(Box::new(e));
         }
     };
-    let mut quotes: Vec<YQuote> = response
-        .quotes()
-        .unwrap()
-        .into_iter()
-        .map(|q| q.into())
-        .collect();
+    let mut quotes: Vec<YQuote> = response.quotes().unwrap().into_iter().map(|q| q.into()).collect();
 
     // for quote in &quotes {
     //     println!("{:#?}", quote);
@@ -72,7 +57,6 @@ pub async fn fetch_stonks_data(
 
     quotes.sort_by_cached_key(|k| k.timestamp); //just in case aren't sorted already
 
-    println!("END downloading...");
-
     Ok(quotes)
 }
+

@@ -5,11 +5,13 @@ use clap::Clap;
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
+use async_channel::bounded;
 use future_finance_labs::download_data::fetch_stonks_data;
 use future_finance_labs::downloader_actor::DownloaderActorHandle;
+use future_finance_labs::new_actors::{DActor, DownloadMsg};
 use future_finance_labs::process_data::{extract_adjclose, min_and_max, n_window_sma, price_diff};
 use future_finance_labs::processor_actor::ProcessorActorHandle;
-use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use yahoo_finance_api::YahooConnector;
 
 //simpler but defo lacking functionality vs normal builder pattern
@@ -35,6 +37,7 @@ struct Opts {
 }
 
 #[tokio::main]
+// #[async_std::main]
 async fn main() {
     let opts = Opts::parse();
     let from: DateTime<Utc> = opts
@@ -56,20 +59,34 @@ async fn main() {
     .unwrap();
     wtr.flush().unwrap();
 
-    for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
-        // todo because there is no publish / subscribe we're forced to create a new actor on each iteration of the loop
-        //  that's because we need to send each new task to a new actor
-        //  this sort of destroys the purpose of having actors.. we could have just used an event loop
-        //  in short - this type of actor is the wrong abstraction here - we need publish/subscribe type actors which tokio doesn't have
-        let processor_handle = ProcessorActorHandle::new();
-        let downloader_handle = DownloaderActorHandle::new(processor_handle);
+    // ----------------------------------------------------------------------------- old way
 
-        downloader_handle
-            .download_data(ticker.into(), from, to)
+    // let processor_handle = ProcessorActorHandle::new();
+    // let downloader_handle = DownloaderActorHandle::new();
+    //
+    // for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
+    //     downloader_handle
+    //         .download_data(ticker.into(), from, to, processor_handle.clone())
+    //         .await;
+    // }
+
+    // ----------------------------------------------------------------------------- new way
+
+    let (s, r) = mpsc::channel(10);
+    let mut d_actor = DActor::new(r);
+
+    // async_std::task::spawn(async move { d_actor.run().await });
+    tokio::spawn(async move { d_actor.run().await });
+    // async_std::task::spawn(run_my_actor(d_actor));
+    // tokio::spawn(run_my_actor(d_actor));
+
+    for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
+        let r = s
+            .send(DownloadMsg {
+                ticker: ticker.into(),
+                from,
+                to,
+            })
             .await;
     }
-
-    //todo what's worse in this type of design we have to keep spinning main in a loop, otherwise it exits early and async tasks never complete
-    // that's coz none of the actors send return msgs, so they return immediately and main loop has nothing else to work on, so it exits
-    loop {}
 }

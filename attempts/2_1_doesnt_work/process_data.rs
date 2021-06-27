@@ -6,6 +6,8 @@ use chrono::{TimeZone, Utc};
 use std::io;
 use std::time::Duration;
 
+pub type Data = Vec<YQuote>;
+
 pub struct ProcessedData {
     pub min_: Decimal,
     pub max_: Decimal,
@@ -55,7 +57,7 @@ pub fn price_diff(series: &[Decimal]) -> (Decimal, Decimal) {
 }
 
 pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
-    println!("START processing...");
+    println!("processing starting..");
 
     std::thread::sleep(Duration::from_secs(5));
     // tokio::time::sleep(tokio::time::Duration::from_secs(5)); // <-- won't work inside a normal (non async) fn
@@ -67,8 +69,6 @@ pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
     let (min_, max_) = min_and_max(&adjclose_series);
     let smas = n_window_sma(30, &adjclose_series).unwrap();
     let (abs_diff, percent_diff) = price_diff(&adjclose_series);
-
-    println!("END processing...");
 
     // write output
     let mut wtr = csv::Writer::from_writer(io::stdout());
@@ -83,6 +83,8 @@ pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
     ])
     .unwrap();
     wtr.flush().unwrap();
+
+    println!("processing done..");
 
     ProcessedData {
         min_,

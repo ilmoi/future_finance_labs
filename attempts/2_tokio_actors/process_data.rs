@@ -1,10 +1,10 @@
-use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::*;
 
 use crate::download_data::YQuote;
-use chrono::{TimeZone, Utc};
-use std::io;
 use std::time::Duration;
+use chrono::{Utc, TimeZone};
+use std::io;
 
 pub struct ProcessedData {
     pub min_: Decimal,
@@ -55,7 +55,6 @@ pub fn price_diff(series: &[Decimal]) -> (Decimal, Decimal) {
 }
 
 pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
-    println!("START processing...");
 
     std::thread::sleep(Duration::from_secs(5));
     // tokio::time::sleep(tokio::time::Duration::from_secs(5)); // <-- won't work inside a normal (non async) fn
@@ -68,8 +67,6 @@ pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
     let smas = n_window_sma(30, &adjclose_series).unwrap();
     let (abs_diff, percent_diff) = price_diff(&adjclose_series);
 
-    println!("END processing...");
-
     // write output
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&[
@@ -80,15 +77,8 @@ pub fn process_data(quotes: Vec<YQuote>, ticker: String) -> ProcessedData {
         min_.round_dp(2).to_string(),
         max_.round_dp(2).to_string(),
         smas[smas.len() - 1].round_dp(2).to_string(),
-    ])
-    .unwrap();
+    ]).unwrap();
     wtr.flush().unwrap();
 
-    ProcessedData {
-        min_,
-        max_,
-        smas,
-        abs_diff,
-        percent_diff,
-    }
+    ProcessedData { min_, max_, smas, abs_diff, percent_diff }
 }

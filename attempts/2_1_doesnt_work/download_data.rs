@@ -36,27 +36,42 @@ impl From<Quote> for YQuote {
 // - Using the Public API (without authentication), you are limited to 2,000 requests per hour per IP (or up to a total of 48,000 requests a day).
 // - Seems that 1h is resolution limit
 pub async fn fetch_stonks_data(
+    provider: &YahooConnector,
     ticker: String,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<Vec<YQuote>, Box<dyn Error>> {
-    println!("START downloading...");
-
-    let provider = YahooConnector::new();
+    println!("download starting.., {},{},{}", ticker, from, to);
 
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     //todo frequency - play with 1d/1h should work for both
-    let response = match provider
+
+    let provider = YahooConnector::new();
+    let from = Utc::now() - chrono::Duration::days(60);
+    let to = Utc::now();
+
+    let response = provider
         .get_quote_history_interval(&ticker, from, to, "1d")
         .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            println!("An ERROR occured: {:?}", e);
-            return Err(Box::new(e));
-        }
-    };
+        .unwrap();
+
+    // let response = match provider
+    //     .get_quote_history_interval(&ticker, from, to, "1d")
+    //     .await
+    // {
+    //     Ok(r) => {
+    //         println!("great got a response");
+    //         r
+    //     }
+    //     Err(e) => {
+    //         println!("An ERROR occured: {:?}", e);
+    //         return Err(Box::new(e));
+    //     }
+    // };
+
+    println!("yay");
+
     let mut quotes: Vec<YQuote> = response
         .quotes()
         .unwrap()
@@ -72,7 +87,7 @@ pub async fn fetch_stonks_data(
 
     quotes.sort_by_cached_key(|k| k.timestamp); //just in case aren't sorted already
 
-    println!("END downloading...");
+    println!("download done..");
 
     Ok(quotes)
 }
