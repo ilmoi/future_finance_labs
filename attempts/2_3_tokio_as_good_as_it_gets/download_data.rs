@@ -1,13 +1,13 @@
 use std::error::Error;
 
-use crate::process_data::{min_and_max, Data};
+use crate::process_data::min_and_max;
 use chrono::{DateTime, Utc};
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use yahoo_finance_api::{Quote, YahooConnector};
 
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Debug, PartialEq, PartialOrd)]
 pub struct YQuote {
     pub timestamp: u64,
     pub open: Decimal,
@@ -39,7 +39,7 @@ pub async fn fetch_stonks_data(
     ticker: String,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-) -> Result<Data, Box<dyn Error>> {
+) -> Result<Vec<YQuote>, Box<dyn Error>> {
     println!("START downloading...");
 
     let provider = YahooConnector::new();

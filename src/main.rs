@@ -5,12 +5,15 @@ use clap::Clap;
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
+use async_std::prelude::*;
+use async_std::stream;
+use xactor::{message, Actor, Broker, Context, Handler, Result, Service, Supervisor};
+
 use future_finance_labs::download_data::fetch_stonks_data;
-use future_finance_labs::downloader_actor::DownloaderActorHandle;
-use future_finance_labs::process_data::{extract_adjclose, min_and_max, n_window_sma, price_diff};
-use future_finance_labs::processor_actor::ProcessorActorHandle;
-use tokio::net::TcpListener;
-use yahoo_finance_api::YahooConnector;
+use future_finance_labs::process_data::{
+    extract_adjclose, min_and_max, n_window_sma, price_diff, process_data, Data,
+};
+use std::time::Duration;
 
 //simpler but defo lacking functionality vs normal builder pattern
 //can't pass in Utc::now() as default value
@@ -34,7 +37,71 @@ struct Opts {
     to: String,
 }
 
-#[tokio::main]
+// ----------------------------------------------------------------------------- msg
+
+#[message]
+#[derive(Clone, Debug)]
+struct DownloadMsg {
+    ticker: String,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+
+#[message]
+#[derive(Clone, Debug)]
+struct ProcessMsg {
+    data: Data,
+    ticker: String,
+}
+
+// ----------------------------------------------------------------------------- actor
+
+#[derive(Default)]
+struct DownloadActor;
+
+#[derive(Default)]
+struct ProcessActor;
+
+#[async_trait::async_trait]
+impl Actor for DownloadActor {
+    async fn started(&mut self, ctx: &mut Context<Self>) -> Result<()> {
+        ctx.subscribe::<DownloadMsg>().await;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Actor for ProcessActor {
+    async fn started(&mut self, ctx: &mut Context<Self>) -> Result<()> {
+        ctx.subscribe::<ProcessMsg>().await;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Handler<DownloadMsg> for DownloadActor {
+    async fn handle(&mut self, _ctx: &mut Context<Self>, msg: DownloadMsg) {
+        let data = fetch_stonks_data(msg.ticker.clone(), msg.from, msg.to)
+            .await
+            .unwrap();
+        //once Download Actor finishes its work, it publishes a msg to the next q, which is the processing q, to be picked up by processing actors
+        let _ = Broker::from_registry().await.unwrap().publish(ProcessMsg {
+            data,
+            ticker: msg.ticker,
+        });
+    }
+}
+
+#[async_trait::async_trait]
+impl Handler<ProcessMsg> for ProcessActor {
+    async fn handle(&mut self, _ctx: &mut Context<Self>, msg: ProcessMsg) {
+        process_data(msg.data, msg.ticker);
+    }
+}
+
+// ----------------------------------------------------------------------------- main
+
+#[xactor::main]
 async fn main() {
     let opts = Opts::parse();
     let from: DateTime<Utc> = opts
@@ -56,20 +123,32 @@ async fn main() {
     .unwrap();
     wtr.flush().unwrap();
 
-    for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
-        // todo because there is no publish / subscribe we're forced to create a new actor on each iteration of the loop
-        //  that's because we need to send each new task to a new actor
-        //  this sort of destroys the purpose of having actors.. we could have just used an event loop
-        //  in short - this type of actor is the wrong abstraction here - we need publish/subscribe type actors which tokio doesn't have
-        let processor_handle = ProcessorActorHandle::new();
-        let downloader_handle = DownloaderActorHandle::new(processor_handle);
+    // weird: if you don't collect addresses, the program stalls
+    // todo weird 2: if you start more than one actor - ALL of them get msgs
+    //  if this can't be fixed this solution is actually WORSE than my solution with tokio actors...
+    //  https://github.com/sunli829/xactor/issues/45
+    let _daddr = DownloadActor::start_default().await.unwrap();
+    // let _daddr2 = DownloadActor::start_default().await.unwrap();
+    let _paddr = ProcessActor::start_default().await.unwrap();
+    // let _paddr2 = ProcessActor::start_default().await.unwrap();
 
-        downloader_handle
-            .download_data(ticker.into(), from, to)
-            .await;
+    // their way - doesn't work for me, I don't see any msgs processed
+    // let downloader = Supervisor::start(|| DownloadActor);
+    // let processor = Supervisor::start(|| ProcessActor);
+    // let _ = downloader.join(processor).await;
+
+    // todo same story with the loop - if main isn't looping, actors won't have time to act
+    let mut interval = stream::interval(Duration::from_secs(10));
+    while interval.next().await.is_some() {
+        for ticker in opts.tickers.split(",").collect::<Vec<&str>>() {
+            // prep msg
+            let msg = DownloadMsg {
+                ticker: ticker.into(),
+                from,
+                to,
+            };
+            // send it
+            let _ = Broker::from_registry().await.unwrap().publish(msg);
+        }
     }
-
-    //todo what's worse in this type of design we have to keep spinning main in a loop, otherwise it exits early and async tasks never complete
-    // that's coz none of the actors send return msgs, so they return immediately and main loop has nothing else to work on, so it exits
-    loop {}
 }

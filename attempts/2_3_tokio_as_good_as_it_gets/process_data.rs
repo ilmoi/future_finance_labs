@@ -6,8 +6,6 @@ use chrono::{TimeZone, Utc};
 use std::io;
 use std::time::Duration;
 
-pub type Data = Vec<YQuote>;
-
 pub struct ProcessedData {
     pub min_: Decimal,
     pub max_: Decimal,
